@@ -49,18 +49,10 @@ def clean_old_folders(base_path: str, max_age_seconds: int = 10800):
         if os.path.isdir(folder_path):
             last_modified = os.path.getmtime(folder_path)
             if now - last_modified > max_age_seconds:
-                # print(f"Deleting folder: {folder_path}")
                 shutil.rmtree(folder_path)
 
 
 def get_youtube_video_id(url, ignore_playlist=True):
-    """
-    Examples:
-    http://youtu.be/SA2iWivDJiE
-    http://www.youtube.com/watch?v=_oPAwA_Udwc&feature=feedu
-    http://www.youtube.com/embed/SA2iWivDJiE
-    http://www.youtube.com/v/SA2iWivDJiE?version=3&amp;hl=en_US
-    """
     if "m.youtube.com" in url:
         url = url.replace("m.youtube.com", "www.youtube.com")
     query = urlparse(url)
@@ -71,7 +63,6 @@ def get_youtube_video_id(url, ignore_playlist=True):
 
     if query.hostname in {'www.youtube.com', 'youtube.com', 'music.youtube.com'}:
         if not ignore_playlist:
-            # use case: get playlist id not current video in playlist
             with suppress(KeyError):
                 return parse_qs(query.query)['list'][0]
         if query.path == '/watch':
@@ -83,7 +74,6 @@ def get_youtube_video_id(url, ignore_playlist=True):
         if query.path[:3] == '/v/':
             return query.path.split('/')[2]
 
-    # returns None for invalid YouTube url
     return None
 
 
@@ -118,12 +108,9 @@ def raise_exception(error_msg, is_webui):
 def get_rvc_model(voice_model, is_webui):
     rvc_model_filename, rvc_index_filename = None, None
     model_dir = os.path.join(rvc_models_dir, voice_model)
-    # print(model_dir)
     for file in os.listdir(model_dir):
-        # print(file)
         if os.path.isdir(file):
             for ff in os.listdir(file):
-                # print("subfile", ff)
                 ext = os.path.splitext(ff)[1]
                 if ext == '.pth':
                     rvc_model_filename = ff
@@ -159,7 +146,6 @@ def get_audio_paths(song_dir):
         elif file.endswith('_Vocals_Backup.wav'):
             backup_vocals_path = os.path.join(song_dir, file)
 
-    # print(orig_song_path, instrumentals_path, main_vocals_dereverb_path, backup_vocals_path)
     return orig_song_path, instrumentals_path, main_vocals_dereverb_path, backup_vocals_path
 
 
@@ -177,7 +163,6 @@ def get_audio_with_suffix(song_dir, suffix="_mysuffix.wav"):
 def convert_to_stereo(audio_path):
     wave, sr = librosa.load(audio_path, mono=False, sr=44100)
 
-    # check if mono
     if type(wave[0]) != np.ndarray:
         stereo_path = f'{os.path.splitext(audio_path)[0]}_stereo.wav'
         command = shlex.split(f'ffmpeg -y -loglevel error -i "{audio_path}" -ac 2 -f wav "{stereo_path}"')
@@ -244,13 +229,14 @@ def get_audio_file(song_input, is_webui, input_type, progress):
         orig_song_path = None
     return keep_orig, orig_song_path
 
+
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 compute_half = True if torch.cuda.is_available() else False
 config = Config(device, compute_half)
 hubert_model = load_hubert("cuda", config.is_half, os.path.join(rvc_models_dir, 'hubert_base.pt'))
 print(device, "half>>", config.is_half)
 
-# @spaces.GPU(enable_queue=True)
+
 def voice_change(voice_model, vocals_path, output_path, pitch_change, f0_method, index_rate, filter_radius, rms_mix_rate, protect, crepe_hop_length, is_webui, steps):
     rvc_model_path, rvc_index_path = get_rvc_model(voice_model, is_webui)
 
@@ -260,7 +246,6 @@ def voice_change(voice_model, vocals_path, output_path, pitch_change, f0_method,
 
     cpt, version, net_g, tgt_sr, vc = get_vc(device, config.is_half, config, rvc_model_path)
 
-    # convert main vocals
     global hubert_model
     rvc_infer(rvc_index_path, index_rate, vocals_path, output_path, pitch_change, f0_method, cpt, version, net_g, filter_radius, tgt_sr, rms_mix_rate, protect, crepe_hop_length, vc, hubert_model, steps)
     del cpt
@@ -270,7 +255,6 @@ def voice_change(voice_model, vocals_path, output_path, pitch_change, f0_method,
 def add_audio_effects(audio_path, reverb_rm_size, reverb_wet, reverb_dry, reverb_damping):
     output_path = f'{os.path.splitext(audio_path)[0]}_mixed.wav'
 
-    # Initialize audio effects plugins
     board = Pedalboard(
         [
             HighpassFilter(),
@@ -281,7 +265,6 @@ def add_audio_effects(audio_path, reverb_rm_size, reverb_wet, reverb_dry, reverb
 
     with AudioFile(audio_path) as f:
         with AudioFile(output_path, 'w', f.samplerate, f.num_channels) as o:
-            # Read one second of audio at a time, until the file is empty:
             while f.tell() < f.frames:
                 chunk = f.read(int(f.samplerate))
                 effected = board(chunk, f.samplerate, reset=False)
@@ -297,40 +280,7 @@ def combine_audio(audio_paths, output_path, main_gain, backup_gain, inst_gain, o
     main_vocal_audio.overlay(backup_vocal_audio).overlay(instrumental_audio).export(output_path, format=output_format)
 
 
-# @spaces.GPU(enable_queue=True, duration=130)
-@spaces.GPU(duration=59)
-def process_song(
-    song_dir, song_input, mdx_model_params, song_id, is_webui, input_type, progress,
-    keep_files, pitch_change, pitch_change_all, voice_model, index_rate, filter_radius,
-    rms_mix_rate, protect, f0_method, crepe_hop_length, output_format, keep_orig, orig_song_path, steps
-):
-
-    if not os.path.exists(song_dir):
-        os.makedirs(song_dir)
-        orig_song_path, vocals_path, instrumentals_path, main_vocals_path, backup_vocals_path, main_vocals_dereverb_path = preprocess_song(song_input, mdx_model_params, song_id, is_webui, input_type, progress, keep_orig, orig_song_path)
-    else:
-        vocals_path, main_vocals_path = None, None
-        paths = get_audio_paths(song_dir)
-
-        # if any of the audio files aren't available or keep intermediate files, rerun preprocess
-        if any(path is None for path in paths):
-            orig_song_path, vocals_path, instrumentals_path, main_vocals_path, backup_vocals_path, main_vocals_dereverb_path = preprocess_song(song_input, mdx_model_params, song_id, is_webui, input_type, progress, keep_orig, orig_song_path)
-        else:
-            orig_song_path, instrumentals_path, main_vocals_dereverb_path, backup_vocals_path = paths
-
-    pitch_change = pitch_change + pitch_change_all
-    ai_vocals_path = os.path.join(song_dir, f'{os.path.splitext(os.path.basename(orig_song_path))[0]}_{voice_model}_p{pitch_change}_i{index_rate}_fr{filter_radius}_rms{rms_mix_rate}_pro{protect}_{f0_method}{"" if f0_method != "mangio-crepe" else f"_{crepe_hop_length}"}_s{steps}.wav')
-    ai_cover_path = os.path.join(song_dir, f'{os.path.splitext(os.path.basename(orig_song_path))[0]} ({voice_model} Ver).{output_format}')
-
-    if not os.path.exists(ai_vocals_path):
-        display_progress('[~] Converting voice using RVC...', 0.5, is_webui, progress)
-        voice_change(voice_model, main_vocals_dereverb_path, ai_vocals_path, pitch_change, f0_method, index_rate, filter_radius, rms_mix_rate, protect, crepe_hop_length, is_webui, steps)
-
-    return ai_vocals_path, ai_cover_path, instrumentals_path, backup_vocals_path, vocals_path, main_vocals_path
-
-
 def apply_noisereduce(audio_list, type_output="wav"):
-    # https://github.com/sa-if/Audio-Denoiser
     print("Noice reduce")
 
     result = []
@@ -338,24 +288,15 @@ def apply_noisereduce(audio_list, type_output="wav"):
         out_path = f"{os.path.splitext(audio_path)[0]}_nr.{type_output}"
 
         try:
-            # Load audio file
             audio = AudioSegment.from_file(audio_path)
-
-            # Convert audio to numpy array
             samples = np.array(audio.get_array_of_samples())
-
-            # Reduce noise
             reduced_noise = nr.reduce_noise(samples, sr=audio.frame_rate, prop_decrease=0.6)
-
-            # Convert reduced noise signal back to audio
             reduced_audio = AudioSegment(
                 reduced_noise.tobytes(), 
                 frame_rate=audio.frame_rate, 
                 sample_width=audio.sample_width,
                 channels=audio.channels
             )
-
-            # Save reduced audio to file
             reduced_audio.export(out_path, format=type_output)
             result.append(out_path)
 
@@ -366,7 +307,48 @@ def apply_noisereduce(audio_list, type_output="wav"):
     return result
 
 
-# @spaces.GPU(duration=140)
+# -----------------------------
+# AUTO REVERB MATCHING (RT60)
+# -----------------------------
+
+def estimate_rt60(audio_path):
+    """Estimación simple de RT60 basada en decaimiento energético."""
+    try:
+        y, sr = librosa.load(audio_path, sr=None)
+    except Exception as e:
+        print(f"[AutoReverb] Error loading audio for RT60: {e}")
+        return 0.3
+
+    if len(y) < sr // 2:
+        return 0.3
+
+    y = librosa.effects.preemphasis(y)
+
+    env = np.abs(librosa.onset.onset_strength(y=y, sr=sr))
+    if len(env) < 10:
+        return 0.3
+
+    env_db = librosa.amplitude_to_db(env, ref=np.max)
+    max_db = np.max(env_db)
+    target = max_db - 60
+
+    idx = np.where(env_db <= target)[0]
+    if len(idx) == 0:
+        return 0.3
+
+    t60 = idx[0] / sr
+    return float(np.clip(t60, 0.1, 1.5))
+
+
+def auto_reverb_params(rt60):
+    """Convierte RT60 estimado en parámetros de reverb."""
+    room_size = float(np.clip(rt60 / 1.5, 0.1, 0.9))
+    wet = float(np.clip(0.15 + rt60 * 0.25, 0.1, 0.9))
+    dry = float(np.clip(1.0 - wet, 0.1, 0.9))
+    damping = float(np.clip(0.4 + rt60 * 0.3, 0.1, 0.9))
+    return room_size, wet, dry, damping
+
+
 def song_cover_pipeline(song_input, voice_model, pitch_change, keep_files,
                         is_webui=0, main_gain=0, backup_gain=0, inst_gain=0, index_rate=0.5, filter_radius=3,
                         rms_mix_rate=0.25, f0_method='rmvpe', crepe_hop_length=128, protect=0.33, pitch_change_all=0,
@@ -388,15 +370,12 @@ def song_cover_pipeline(song_input, voice_model, pitch_change, keep_files,
         with open(os.path.join(mdxnet_models_dir, 'model_data.json')) as infile:
             mdx_model_params = json.load(infile)
 
-        # if youtube url
         if urlparse(song_input).scheme == 'https':
             input_type = 'yt'
             song_id = get_youtube_video_id(song_input)
             if song_id is None:
                 error_msg = 'Invalid YouTube url.'
                 raise_exception(error_msg, is_webui)
-
-        # local audio file
         else:
             input_type = 'local'
             song_input = song_input.strip('\"')
@@ -453,9 +432,27 @@ def song_cover_pipeline(song_input, voice_model, pitch_change, keep_files,
 
         display_progress('[~] Applying audio effects to Vocals...', 0.8, is_webui, progress)
 
-        nr_path = ai_vocals_path  # get_audio_with_suffix(song_dir, "_nr.wav")
+        nr_path = ai_vocals_path
         if extra_denoise:
             ai_vocals_path = apply_noisereduce([ai_vocals_path])[0]
+
+        # -----------------------------
+        # AUTO REVERB MATCHING
+        # -----------------------------
+        try:
+            display_progress('[~] Analysing original reverb (AutoReverb)...', 0.75, is_webui, progress)
+            rt60 = estimate_rt60(main_vocals_path)
+            auto_room, auto_wet, auto_dry, auto_damp = auto_reverb_params(rt60)
+
+            print(f"[AutoReverb] RT60 estimated: {rt60:.2f}s")
+            print(f"[AutoReverb] Params -> room:{auto_room:.2f}, wet:{auto_wet:.2f}, dry:{auto_dry:.2f}, damp:{auto_damp:.2f}")
+
+            reverb_rm_size = auto_room
+            reverb_wet = auto_wet
+            reverb_dry = auto_dry
+            reverb_damping = auto_damp
+        except Exception as e:
+            print(f"[AutoReverb] Failed, using manual reverb params: {e}")
 
         ai_vocals_mixed_path = add_audio_effects(ai_vocals_path, reverb_rm_size, reverb_wet, reverb_dry, reverb_damping)
 
@@ -466,7 +463,6 @@ def song_cover_pipeline(song_input, voice_model, pitch_change, keep_files,
                 os.path.join(output_dir, song_id),
                 os.path.join(mdxnet_models_dir, "UVR-MDX-NET-Inst_HQ_4.onnx"),
                 instrumentals_path,
-                # exclude_main=False,
                 exclude_inversion=True,
                 suffix="Voiceless",
                 denoise=False,
